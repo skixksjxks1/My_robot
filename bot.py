@@ -16,7 +16,7 @@ from telegram.constants import ParseMode
 
 # ================== تنظیمات ==================
 BOT_TOKEN = "8669573949:AAFWKdWp8njdHNuBLlzg__dBb9Z-N9YsiCg"
-ADMIN_ID = 8669573949  # آیدی عددی خودت
+ADMIN_ID = 8669573949
 
 # اسپانسرها
 SPONSOR_CHANNEL = "@V2ray_company"
@@ -24,7 +24,7 @@ SPONSOR_CHANNEL_LINK = "https://t.me/V2ray_company"
 SPONSOR_BOT = "@FaraDownloaderBot"
 SUPPORT_GROUP = "https://t.me/+JArqswroP-QyMTJk"
 
-# فایل سورس زئوس (باید در کنار bot.py باشد)
+# فایل سورس زئوس
 ZEUS_SOURCE_FILE = "zeus_source.js"
 
 # حالت‌های مکالمه
@@ -88,7 +88,7 @@ async def save_panel(user_id, worker_name, panel_url, subdomain):
         """, (user_id, worker_name, panel_url, subdomain, datetime.now().isoformat()))
         await db.commit()
 
-# ================== چک عضویت اسپانسر ==================
+# ================== چک عضویت ==================
 async def check_membership(user_id, bot):
     try:
         member = await bot.get_chat_member(SPONSOR_CHANNEL, user_id)
@@ -98,13 +98,13 @@ async def check_membership(user_id, bot):
     except Exception:
         return False
 
-# ================== کیبوردها ==================
+# ================== کیبوردها (رنگ‌های صحیح) ==================
 def main_menu_keyboard():
     keyboard = [
-        [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel", text_color="#FFFFFF")],
-        [InlineKeyboardButton("🔵 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels", text_color="#FFFFFF")],
+        [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
+        [InlineKeyboardButton("🔵 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
         [InlineKeyboardButton("☁️ ثبت اکانت کلودفلر", callback_data="register_cf")],
-        [InlineKeyboardButton("🔴 پشتیبانی", url=SUPPORT_GROUP, text_color="#FFFFFF")]
+        [InlineKeyboardButton("🔴 پشتیبانی", url=SUPPORT_GROUP)]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -297,7 +297,7 @@ async def create_panel_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     keyboard = [
-        [InlineKeyboardButton(f"☁️ {db_user['cf_email']}", callback_data=f"deploy_{db_user['user_id']}", text_color="#FFFFFF")],
+        [InlineKeyboardButton(f"☁️ {db_user['cf_email']}", callback_data=f"deploy_{db_user['user_id']}")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
     ]
     await query.edit_message_text(
@@ -328,8 +328,8 @@ async def deploy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await save_panel(user.id, worker_name, panel_url, subdomain)
 
         keyboard = [
-            [InlineKeyboardButton("🔗 ورود به پنل اختصاصی", url=panel_url, text_color="#FFFFFF")],
-            [InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_main", text_color="#FFFFFF")]
+            [InlineKeyboardButton("🔗 ورود به پنل اختصاصی", url=panel_url)],
+            [InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_main")]
         ]
         await query.edit_message_text(
             f"✅ **پنل زئوس با موفقیت ساخته شد!**\n\n"
@@ -362,12 +362,10 @@ async def manage_panels_callback(update: Update, context: ContextTypes.DEFAULT_T
     keyboard = []
     for p in panels:
         keyboard.append([
-            InlineKeyboardButton(f"🔄 آپدیت {p['worker_name']}", callback_data=f"update_{p['id']}", text_color="#FFFFFF")
+            InlineKeyboardButton(f"🔄 آپدیت {p['worker_name']}", callback_data=f"update_{p['id']}"),
+            InlineKeyboardButton(f"🔗 ورود به پنل", url=p['panel_url'])
         ])
-        keyboard.append([
-            InlineKeyboardButton(f"🔗 ورود به پنل", url=p['panel_url'], text_color="#FFFFFF")
-        ])
-    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", text_color="#FFFFFF")])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
 
     await query.edit_message_text(
         "🔵 **مدیریت پنل‌های شما**\n\nبرای آپدیت روی دکمه مربوطه بزنید:",
