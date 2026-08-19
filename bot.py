@@ -98,7 +98,7 @@ async def check_membership(user_id, bot):
     except Exception:
         return False
 
-# ================== کیبوردها (رنگ‌های صحیح) ==================
+# ================== کیبوردها (رنگ‌های دقیق طبق عکس) ==================
 def main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
@@ -251,7 +251,7 @@ async def register_cf_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         "برای جلوگیری از بروز خطا، لطفاً مراحل زیر را به ترتیب انجام دهید. "
         "اگر در مرورگر خود لاگین نیستید، حتماً از گام اول شروع کنید.\n\n"
         "🔹 **گام اول:**\n"
-        "روی دکمه «ورود به کلودفلر» کلیک کنید و وارد حساب کاربری خود شوید.\n"
+        "روی دکمه «ورید به کلودفلر» کلیک کنید و وارد حساب کاربری خود شوید.\n"
         "(پس از ورود موفق، حتماً دوباره به همینجا در تلگرام برگردید)\n\n"
         "🔹 **گام دوم:**\n"
         "حالا روی دکمه «دریافت توکن اختصاصی» کلیک کنید.\n"
@@ -408,7 +408,7 @@ def main():
     app.add_handler(CallbackQueryHandler(manage_panels_callback, pattern="^manage_panels$"))
     app.add_handler(CallbackQueryHandler(back_main, pattern="^back_main$"))
 
-    print("🤖 ربات EzPanelMaker شروع به کار کرد...")
+    print("🤖 ربات EzPanelMaker شروع به کار کرد... (رنگ دکمه‌ها آپدیت شد)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
