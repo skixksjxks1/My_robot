@@ -91,7 +91,6 @@ async def save_panel(user_id, worker_name, panel_url, subdomain):
 # ================== چک عضویت اسپانسر ==================
 async def check_membership(user_id, bot):
     try:
-        # چک کانال
         member = await bot.get_chat_member(SPONSOR_CHANNEL, user_id)
         if member.status in ["left", "kicked"]:
             return False
@@ -102,17 +101,17 @@ async def check_membership(user_id, bot):
 # ================== کیبوردها ==================
 def main_menu_keyboard():
     keyboard = [
-        [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
-        [InlineKeyboardButton("🔵 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
+        [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel", text_color="#FFFFFF")],
+        [InlineKeyboardButton("🔵 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels", text_color="#FFFFFF")],
         [InlineKeyboardButton("☁️ ثبت اکانت کلودفلر", callback_data="register_cf")],
-        [InlineKeyboardButton("🔴 پشتیبانی", url=SUPPORT_GROUP)]
+        [InlineKeyboardButton("🔴 پشتیبانی", url=SUPPORT_GROUP, text_color="#FFFFFF")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def sponsor_keyboard():
     keyboard = [
         [InlineKeyboardButton("📥 ربات دانلودر اینستاگرام رایگان", url="https://t.me/FaraDownloaderBot")],
-        [InlineKeyboardButton("📚 آموزش و فروش V2ray_company | VPN", url=SPONSOR_CHANNEL_LINK)],
+        [InlineKeyboardButton("📚 آموزش و فروش V2ray_company | VPN", url="https://t.me/V2ray_company")],
         [InlineKeyboardButton("✅ تایید عضویت و ورود به ربات", callback_data="check_join")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -129,13 +128,11 @@ def cf_register_keyboard():
 async def verify_cf_token(token: str):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
-        # Verify token
         async with session.get("https://api.cloudflare.com/client/v4/user/tokens/verify", headers=headers) as resp:
             data = await resp.json()
             if not data.get("success"):
                 return None, None, None
 
-        # Get accounts
         async with session.get("https://api.cloudflare.com/client/v4/accounts", headers=headers) as resp:
             acc_data = await resp.json()
             if not acc_data.get("success") or not acc_data.get("result"):
@@ -144,7 +141,6 @@ async def verify_cf_token(token: str):
             account_id = account["id"]
             email = account.get("name") or "Account"
 
-        # Get user email if possible
         try:
             async with session.get("https://api.cloudflare.com/client/v4/user", headers=headers) as resp:
                 user_data = await resp.json()
@@ -156,30 +152,13 @@ async def verify_cf_token(token: str):
         return token, account_id, email
 
 async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
-    """دیپلوی کامل پنل زئوس روی ورکر + ایجاد D1"""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
-        # 1. ایجاد دیتابیس D1
-        d1_payload = {
-            "name": f"zeus-db-{worker_name}",
-            "primary_location_hint": "WNAM"
-        }
-        async with session.post(
-            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database",
-            headers=headers,
-            json=d1_payload
-        ) as resp:
+        d1_payload = {"name": f"zeus-db-{worker_name}", "primary_location_hint": "WNAM"}
+        async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database", headers=headers, json=d1_payload) as resp:
             d1_data = await resp.json()
             if not d1_data.get("success"):
-                # اگر قبلاً وجود داشت، لیست بگیر
-                async with session.get(
-                    f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database",
-                    headers=headers
-                ) as list_resp:
+                async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database", headers=headers) as list_resp:
                     list_data = await list_resp.json()
                     db_id = None
                     for db in list_data.get("result", []):
@@ -191,54 +170,32 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
             else:
                 db_id = d1_data["result"]["uuid"]
 
-        # 2. خواندن سورس زئوس
         with open(ZEUS_SOURCE_FILE, "r", encoding="utf-8") as f:
             zeus_code = f.read()
 
-        # 3. آپلود ورکر (metadata + script)
         form = aiohttp.FormData()
         metadata = {
             "main_module": "zeus.js",
             "compatibility_date": "2024-09-23",
             "compatibility_flags": ["nodejs_compat"],
-            "bindings": [
-                {
-                    "type": "d1",
-                    "name": "DB",
-                    "id": db_id
-                }
-            ]
+            "bindings": [{"type": "d1", "name": "DB", "id": db_id}]
         }
         form.add_field("metadata", json.dumps(metadata), content_type="application/json")
         form.add_field("zeus.js", zeus_code, filename="zeus.js", content_type="application/javascript+module")
 
-        async with session.put(
-            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}",
-            headers={"Authorization": f"Bearer {token}"},
-            data=form
-        ) as resp:
+        async with session.put(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}", headers={"Authorization": f"Bearer {token}"}, data=form) as resp:
             deploy_data = await resp.json()
             if not deploy_data.get("success"):
                 error_msg = deploy_data.get("errors", [{}])[0].get("message", "خطای ناشناخته")
                 raise Exception(f"خطا در دیپلوی ورکر: {error_msg}")
 
-        # 4. فعال‌سازی subdomain (workers.dev)
-        # معمولاً به صورت پیش‌فرض فعال است، اما برای اطمینان:
         try:
-            async with session.post(
-                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}/subdomain",
-                headers=headers,
-                json={"enabled": True}
-            ) as resp:
+            async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}/subdomain", headers=headers, json={"enabled": True}) as resp:
                 pass
         except:
             pass
 
-        # 5. گرفتن subdomain حساب
-        async with session.get(
-            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain",
-            headers=headers
-        ) as resp:
+        async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain", headers=headers) as resp:
             sub_data = await resp.json()
             subdomain = sub_data.get("result", {}).get("subdomain", "workers")
 
@@ -261,7 +218,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, reply_markup=sponsor_keyboard(), parse_mode=ParseMode.MARKDOWN)
         return
 
-    # کاربر عضو است
     await update.message.reply_text(
         f"سلام {user.first_name} 👋\n\n"
         "به ربات **EzPanelMaker | ایزی پنل ماکر** خوش آمدید.\n"
@@ -340,9 +296,8 @@ async def create_panel_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    # نمایش اکانت‌های ثبت‌شده (فعلاً فقط یکی)
     keyboard = [
-        [InlineKeyboardButton(f"☁️ {db_user['cf_email']}", callback_data=f"deploy_{db_user['user_id']}")],
+        [InlineKeyboardButton(f"☁️ {db_user['cf_email']}", callback_data=f"deploy_{db_user['user_id']}", text_color="#FFFFFF")],
         [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
     ]
     await query.edit_message_text(
@@ -364,7 +319,6 @@ async def deploy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("⏳ **در حال ساخت پنل زئوس...**\nلطفاً چند لحظه صبر کنید...")
 
     try:
-        # نام یکتا برای ورکر
         worker_name = f"zeus-{user.id}-{int(datetime.now().timestamp()) % 100000}"
         panel_url, subdomain = await deploy_zeus_panel(
             db_user["cf_token"],
@@ -374,8 +328,8 @@ async def deploy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await save_panel(user.id, worker_name, panel_url, subdomain)
 
         keyboard = [
-            [InlineKeyboardButton("🔗 ورود به پنل اختصاصی", url=panel_url)],
-            [InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_main")]
+            [InlineKeyboardButton("🔗 ورود به پنل اختصاصی", url=panel_url, text_color="#FFFFFF")],
+            [InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_main", text_color="#FFFFFF")]
         ]
         await query.edit_message_text(
             f"✅ **پنل زئوس با موفقیت ساخته شد!**\n\n"
@@ -408,12 +362,12 @@ async def manage_panels_callback(update: Update, context: ContextTypes.DEFAULT_T
     keyboard = []
     for p in panels:
         keyboard.append([
-            InlineKeyboardButton(f"🔄 آپدیت {p['worker_name']}", callback_data=f"update_{p['id']}")
+            InlineKeyboardButton(f"🔄 آپدیت {p['worker_name']}", callback_data=f"update_{p['id']}", text_color="#FFFFFF")
         ])
         keyboard.append([
-            InlineKeyboardButton(f"🔗 ورود به پنل", url=p['panel_url'])
+            InlineKeyboardButton(f"🔗 ورود به پنل", url=p['panel_url'], text_color="#FFFFFF")
         ])
-    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main", text_color="#FFFFFF")])
 
     await query.edit_message_text(
         "🔵 **مدیریت پنل‌های شما**\n\nبرای آپدیت روی دکمه مربوطه بزنید:",
@@ -440,9 +394,7 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(register_cf_callback, pattern="^register_cf$")],
-        states={
-            WAITING_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token)]
-        },
+        states={WAITING_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token)]},
         fallbacks=[
             CallbackQueryHandler(back_main, pattern="^back_main$"),
             CommandHandler("cancel", cancel)
