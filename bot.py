@@ -16,7 +16,8 @@ from telegram.constants import ParseMode
 
 # ================== تنظیمات ==================
 BOT_TOKEN = "8669573949:AAFWKdWp8njdHNuBLlzg__dBb9Z-N9YsiCg"
-ADMIN_ID = 8669573949
+ADMIN_ID = 7277847715   # ←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←←
+# تغییر به ایدی مدیر جدید
 
 # اسپانسرها
 SPONSOR_CHANNEL = "@V2ray_company"
@@ -29,6 +30,7 @@ ZEUS_SOURCE_FILE = "zeus_source.js"
 
 # حالت‌های مکالمه
 WAITING_TOKEN = 1
+WAITING_ANNOUNCEMENT = 2
 
 # ================== دیتابیس ==================
 async def init_db():
@@ -102,9 +104,16 @@ async def check_membership(user_id, bot):
 def main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
-        [InlineKeyboardButton("🔵 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
-        [InlineKeyboardButton("☁️ ثبت اکانت کلودفلر", callback_data="register_cf")],
-        [InlineKeyboardButton("🔴 پشتیبانی", url=SUPPORT_GROUP)]
+        [InlineKeyboardButton("🔵 مدیریت پنل‌های من", callback_data="manage_panels")],
+        [InlineKeyboardButton("☁️ ثبت اکانت کلودفلر", callback_data="register_cf")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def admin_menu_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
+        [InlineKeyboardButton("📢 ارسال اطلاعیه متنی", callback_data="announce")],
+        [InlineKeyboardButton("🔙 بازگشت به پنل عادی", callback_data="back_to_user")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -154,7 +163,6 @@ async def verify_cf_token(token: str):
 async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
-        # ایجاد یا دریافت D1 Database
         d1_payload = {"name": f"zeus-db-{worker_name}", "primary_location_hint": "WNAM"}
         async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database", headers=headers, json=d1_payload) as resp:
             d1_data = await resp.json()
@@ -171,11 +179,9 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
             else:
                 db_id = d1_data["result"]["uuid"]
 
-        # خواندن کد Worker
         with open(ZEUS_SOURCE_FILE, "r", encoding="utf-8") as f:
             zeus_code = f.read()
 
-        # آپلود Worker (مسیر جدید API)
         metadata = {
             "main_module": "zeus.js",
             "compatibility_date": "2024-09-23",
@@ -192,14 +198,12 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
                 error_msg = deploy_data.get("errors", [{}])[0].get("message", "خطای ناشناخته")
                 raise Exception(f"خطا در دیپلوی ورکر: {error_msg}")
 
-        # فعال‌سازی subdomain routing
         try:
             async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}/subdomain", headers=headers, json={"enabled": True}) as resp:
                 pass
         except:
             pass
 
-        # گرفتن subdomain
         async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain", headers=headers) as resp:
             sub_data = await resp.json()
             subdomain = sub_data.get("result", {}).get("subdomain", "workers")
@@ -223,13 +227,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, reply_markup=sponsor_keyboard(), parse_mode=ParseMode.MARKDOWN)
         return
 
-    await update.message.reply_text(
-        f"سلام {user.first_name} 👋\n\n"
-        "به ربات **EzPanelMaker | ایزی پنل ماکر** خوش آمدید.\n"
-        "با این ربات می‌توانید پنل زئوس را به صورت کاملاً اتوماتیک روی کلودفلر بسازید.",
-        reply_markup=main_menu_keyboard(),
-        parse_mode=ParseMode.MARKDOWN
-    )
+    if user.id == ADMIN_ID:
+        text = f"سلام {user.first_name} 👋\n\nشما مدیر ربات هستید."
+        await update.message.reply_text(text, reply_markup=admin_menu_keyboard(), parse_mode=ParseMode.MARKDOWN)
+    else:
+        await update.message.reply_text(
+            f"سلام {user.first_name} 👋\n\n"
+            "به ربات **EzPanelMaker | ایزی پنل ماکر** خوش آمدید.\n"
+            "با این ربات می‌توانید پنل زئوس را به صورت کاملاً اتوماتیک روی کلودفلر بسازید.",
+            reply_markup=main_menu_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -238,12 +246,20 @@ async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     is_member = await check_membership(user.id, context.bot)
 
     if is_member:
-        await query.edit_message_text(
-            f"✅ عضویت شما تایید شد!\n\nسلام {user.first_name} 👋\n"
-            "به ربات **EzPanelMaker** خوش آمدید.",
-            reply_markup=main_menu_keyboard(),
-            parse_mode=ParseMode.MARKDOWN
-        )
+        if user.id == ADMIN_ID:
+            await query.edit_message_text(
+                f"✅ عضویت شما تایید شد!\n\nسلام {user.first_name} 👋\n"
+                "شما مدیر ربات هستید.",
+                reply_markup=admin_menu_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
+        else:
+            await query.edit_message_text(
+                f"✅ عضویت شما تایید شد!\n\nسلام {user.first_name} 👋\n"
+                "به ربات **EzPanelMaker** خوش آمدید.",
+                reply_markup=main_menu_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
     else:
         await query.answer("❌ هنوز عضو کانال/ربات اسپانسر نشده‌اید!", show_alert=True)
 
@@ -283,7 +299,7 @@ async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await save_cf_token(user.id, user.username or "", verified_token, account_id, email)
     await msg.edit_text(
         f"✅ توکن اکانت «{email}» با موفقیت تایید و ذخیره شد!",
-        reply_markup=main_menu_keyboard()
+        reply_markup=main_menu_keyboard() if user.id != ADMIN_ID else admin_menu_keyboard()
     )
     return ConversationHandler.END
 
@@ -379,6 +395,62 @@ async def manage_panels_callback(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode=ParseMode.MARKDOWN
     )
 
+async def back_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    await query.edit_message_text(
+        f"سلام {user.first_name} 👋\n\nبه پنل عادی بازگشتید.",
+        reply_markup=main_menu_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+# ================== اطلاعیه متنی ==================
+async def announce_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    if user.id != ADMIN_ID:
+        await query.answer("❌ فقط مدیر می‌تواند اطلاعیه بفرستد.", show_alert=True)
+        return
+
+    await query.edit_message_text(
+        "📢 **ارسال اطلاعیه متنی**\n\n"
+        "پیام متنی را اینجا ارسال کنید. تمام کاربرانی که پنل دارند، پیام را دریافت خواهند کرد.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_admin")]])
+    )
+    return WAITING_ANNOUNCEMENT
+
+async def receive_announcement(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("❌ فقط مدیر می‌تواند اطلاعیه بفرستد.")
+        return ConversationHandler.END
+
+    announcement_text = update.message.text.strip()
+    if not announcement_text:
+        await update.message.reply_text("❌ متن خالی است.")
+        return WAITING_ANNOUNCEMENT
+
+    async with aiosqlite.connect("ezpanel.db") as db:
+        async with db.execute("SELECT user_id FROM users") as cursor:
+            rows = await cursor.fetchall()
+
+    sent_count = 0
+    for row in rows:
+        user_id = row[0]
+        try:
+            await context.bot.send_message(chat_id=user_id, text=announcement_text)
+            sent_count += 1
+        except:
+            pass
+
+    await update.message.reply_text(
+        f"✅ اطلاعیه با موفقیت ارسال شد!\n\nتعداد کاربران دریافت‌کننده: **{sent_count}** نفر",
+        parse_mode=ParseMode.MARKDOWN
+    )
+    return ConversationHandler.END
+
 async def back_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -397,10 +469,18 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(register_cf_callback, pattern="^register_cf$")],
-        states={WAITING_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token)]},
+        entry_points=[
+            CallbackQueryHandler(register_cf_callback, pattern="^register_cf$"),
+            CallbackQueryHandler(announce_callback, pattern="^announce$"),
+        ],
+        states={
+            WAITING_TOKEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token)],
+            WAITING_ANNOUNCEMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_announcement)],
+        },
         fallbacks=[
             CallbackQueryHandler(back_main, pattern="^back_main$"),
+            CallbackQueryHandler(back_to_user, pattern="^back_to_user$"),
+            CallbackQueryHandler(back_to_admin, pattern="^back_to_admin$"),
             CommandHandler("cancel", cancel)
         ],
         allow_reentry=True
@@ -413,8 +493,10 @@ def main():
     app.add_handler(CallbackQueryHandler(deploy_callback, pattern="^deploy_"))
     app.add_handler(CallbackQueryHandler(manage_panels_callback, pattern="^manage_panels$"))
     app.add_handler(CallbackQueryHandler(back_main, pattern="^back_main$"))
+    app.add_handler(CallbackQueryHandler(back_to_user, pattern="^back_to_user$"))
+    app.add_handler(CallbackQueryHandler(back_to_admin, pattern="^back_to_admin$"))
 
-    print("🤖 ربات EzPanelMaker شروع به کار کرد... (رنگ دکمه‌ها آپدیت شد)")
+    print("🤖 ربات EzPanelMaker شروع به کار کرد... (ایدی مدیر تغییر کرد)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
