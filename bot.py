@@ -101,27 +101,26 @@ async def check_membership(user_id, bot):
 # ================== کیبوردها ==================
 def main_menu_keyboard():
     keyboard = [
-        [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
-        [InlineKeyboardButton("🔵 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
-        [InlineKeyboardButton("🔵 ثبت اکانت کلودفلر", callback_data="register_cf")],
-        [InlineKeyboardButton("🟠 اکانت‌ها", callback_data="show_accounts")],
-        [InlineKeyboardButton("🔴 پشتیبانی", url=SUPPORT_GROUP)]
+        [InlineKeyboardButton("ساخت پنل جدید", callback_data="create_panel")],
+        [InlineKeyboardButton("مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
+        [InlineKeyboardButton("ثبت اکانت کلودفلر", callback_data="register_cf")],
+        [InlineKeyboardButton("پشتیبانی", url=SUPPORT_GROUP)]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def sponsor_keyboard():
     keyboard = [
-        [InlineKeyboardButton("📥 ربات دانلودر اینستاگرام رایگان", url="https://t.me/FaraDownloaderBot")],
-        [InlineKeyboardButton("📚 آموزش و فروش V2ray_company | VPN", url="https://t.me/V2ray_company")],
-        [InlineKeyboardButton("✅ تایید عضویت و ورود به ربات", callback_data="check_join")]
+        [InlineKeyboardButton("ربات دانلودر اینستاگرام رایگان", url="https://t.me/FaraDownloaderBot")],
+        [InlineKeyboardButton("آموزش و فروش V2ray_company | VPN", url="https://t.me/V2ray_company")],
+        [InlineKeyboardButton("تایید عضویت و ورود به ربات", callback_data="check_join")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def cf_register_keyboard():
     keyboard = [
-        [InlineKeyboardButton("🔐 ورود به حساب کلودفلر", url="https://dash.cloudflare.com/login")],
-        [InlineKeyboardButton("🎫 دریافت توکن اختصاصی زئوس", url="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_subdomain%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=Zeus-Deployer-Token")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
+        [InlineKeyboardButton("ورود به حساب کلودفلر", url="https://dash.cloudflare.com/login")],
+        [InlineKeyboardButton("دریافت توکن اختصاصی زئوس", url="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_subdomain%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=Zeus-Deployer-Token")],
+        [InlineKeyboardButton("بازگشت", callback_data="back_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -288,98 +287,6 @@ async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# ================== هندلر جدید: اکانت‌ها ==================
-async def show_accounts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    try:
-        async with aiosqlite.connect("ezpanel.db") as db:
-            async with db.execute("SELECT user_id, cf_email FROM users") as cursor:
-                rows = await cursor.fetchall()
-
-        if not rows:
-            await query.edit_message_text(
-                "❌ هیچ اکانتی در سیستم ثبت نشده است.",
-                reply_markup=main_menu_keyboard(),
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-
-        keyboard = []
-        for user_id, email in rows:
-            count = 0
-            async with aiosqlite.connect("ezpanel.db") as db:
-                async with db.execute("SELECT COUNT(*) FROM panels WHERE user_id = ?", (user_id,)) as c:
-                    count = (await c.fetchone())[0]
-
-            keyboard.append([
-                InlineKeyboardButton(f"☁️ {email} ({count} پنل)", callback_data=f"account_detail_{user_id}")
-            ])
-
-        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
-
-        await query.edit_message_text(
-            "🧾 **لیست اکانت‌های ثبت‌شده**\n\n"
-            "هر اکانت را انتخاب کنید تا تعداد پنل‌های آن را ببینید:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-    except Exception as e:
-        await query.edit_message_text(
-            f"❌ خطا در بارگذاری اکانت‌ها: {str(e)}",
-            reply_markup=main_menu_keyboard()
-        )
-
-async def show_account_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    try:
-        data = query.data
-        if not data.startswith("account_detail_"):
-            return
-
-        target_user_id = int(data.split("_")[-1])
-
-        async with aiosqlite.connect("ezpanel.db") as db:
-            async with db.execute("SELECT cf_email FROM users WHERE user_id = ?", (target_user_id,)) as cu:
-                row = await cu.fetchone()
-                if not row:
-                    await query.edit_message_text("❌ اکانت یافت نشد.", reply_markup=main_menu_keyboard())
-                    return
-                email = row[0]
-
-            async with db.execute("SELECT * FROM panels WHERE user_id = ?", (target_user_id,)) as cursor:
-                panels = await cursor.fetchall()
-
-        if not panels:
-            text = f"✅ اکانت **{email}**\n\nهیچ پنلی ساخته نشده."
-            kb = [[InlineKeyboardButton("🔙 لیست اکانت‌ها", callback_data="show_accounts")]]
-        else:
-            keyboard = []
-            for p in panels:
-                keyboard.append([
-                    InlineKeyboardButton(f"🔗 {p[2]}", url=p[3])
-                ])
-            keyboard.append([InlineKeyboardButton("🔙 لیست اکانت‌ها", callback_data="show_accounts")])
-
-            text = f"✅ اکانت **{email}**\n\nتعداد پنل‌ها: **{len(panels)}**\n\nلیست پنل‌های ساخته‌شده:"
-
-        await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-    except Exception as e:
-        await query.edit_message_text(
-            f"❌ خطا: {str(e)}",
-            reply_markup=main_menu_keyboard()
-        )
-
-# ================== هندلرهای قبلی ==================
 async def create_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -389,14 +296,14 @@ async def create_panel_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not db_user or not db_user.get("cf_token"):
         await query.edit_message_text(
             "⚠️ هیچ اکانت کلودفلری یافت نشد!\n\n"
-            "لطفاً ابتدا از منوی اصلی روی «☁️ ثبت اکانت کلودفلر» کلیک کنید.",
+            "لطفاً ابتدا از منوی اصلی روی «ثبت اکانت کلودفلر» کلیک کنید.",
             reply_markup=main_menu_keyboard()
         )
         return
 
     keyboard = [
-        [InlineKeyboardButton(f"☁️ {db_user['cf_email']}", callback_data=f"deploy_{db_user['user_id']}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
+        [InlineKeyboardButton(db_user['cf_email'], callback_data=f"deploy_{db_user['user_id']}")],
+        [InlineKeyboardButton("بازگشت", callback_data="back_main")]
     ]
     await query.edit_message_text(
         "🚀 **تایید استقرار پنل**\n\nبرای ساخت پنل جدید روی اکانت زیر کلیک کنید:",
@@ -427,8 +334,8 @@ async def deploy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await save_panel(user.id, worker_name, panel_url, subdomain)
 
         keyboard = [
-            [InlineKeyboardButton("🔗 ورود به پنل اختصاصی", url=panel_url)],
-            [InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_main")]
+            [InlineKeyboardButton("ورود به پنل اختصاصی", url=panel_url)],
+            [InlineKeyboardButton("منوی اصلی", callback_data="back_main")]
         ]
         await query.edit_message_text(
             f"✅ **پنل زئوس با موفقیت ساخته شد!**\n\n"
@@ -461,10 +368,10 @@ async def manage_panels_callback(update: Update, context: ContextTypes.DEFAULT_T
     keyboard = []
     for p in panels:
         keyboard.append([
-            InlineKeyboardButton(f"🔄 آپدیت {p['worker_name']}", callback_data=f"update_{p['id']}"),
-            InlineKeyboardButton(f"🔗 ورود به پنل", url=p['panel_url'])
+            InlineKeyboardButton(f"آپدیت {p['worker_name']}", callback_data=f"update_{p['id']}"),
+            InlineKeyboardButton(f"ورود به پنل", url=p['panel_url'])
         ])
-    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
+    keyboard.append([InlineKeyboardButton("بازگشت", callback_data="back_main")])
 
     await query.edit_message_text(
         "🔵 **مدیریت پنل‌های شما**\n\nبرای آپدیت روی دکمه مربوطه بزنید:",
@@ -506,10 +413,8 @@ def main():
     app.add_handler(CallbackQueryHandler(deploy_callback, pattern="^deploy_"))
     app.add_handler(CallbackQueryHandler(manage_panels_callback, pattern="^manage_panels$"))
     app.add_handler(CallbackQueryHandler(back_main, pattern="^back_main$"))
-    app.add_handler(CallbackQueryHandler(show_accounts_callback, pattern="^show_accounts$"))
-    app.add_handler(CallbackQueryHandler(show_account_panels, pattern="^account_detail_"))
 
-    print("🤖 ربات EzPanelMaker شروع به کار کرد... (دکمه اکانت‌ها + رنگ‌های جدید)")
+    print("🤖 ربات EzPanelMaker شروع به کار کرد... (رنگ کاملاً بدون ایموجی)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
