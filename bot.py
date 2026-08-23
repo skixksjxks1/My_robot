@@ -98,7 +98,7 @@ async def check_membership(user_id, bot):
     except Exception:
         return False
 
-# ================== کیبوردها (رنگ‌های دقیق طبق عکس) ==================
+# ================== کیبوردها ==================
 def main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
@@ -154,6 +154,7 @@ async def verify_cf_token(token: str):
 async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
+        # ایجاد یا دریافت D1 Database
         d1_payload = {"name": f"zeus-db-{worker_name}", "primary_location_hint": "WNAM"}
         async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database", headers=headers, json=d1_payload) as resp:
             d1_data = await resp.json()
@@ -170,16 +171,18 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
             else:
                 db_id = d1_data["result"]["uuid"]
 
+        # خواندن کد Worker
         with open(ZEUS_SOURCE_FILE, "r", encoding="utf-8") as f:
             zeus_code = f.read()
 
-        form = aiohttp.FormData()
+        # آپلود Worker (مسیر جدید API)
         metadata = {
             "main_module": "zeus.js",
             "compatibility_date": "2024-09-23",
             "compatibility_flags": ["nodejs_compat"],
             "bindings": [{"type": "d1", "name": "DB", "id": db_id}]
         }
+        form = aiohttp.FormData()
         form.add_field("metadata", json.dumps(metadata), content_type="application/json")
         form.add_field("zeus.js", zeus_code, filename="zeus.js", content_type="application/javascript+module")
 
@@ -189,12 +192,14 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
                 error_msg = deploy_data.get("errors", [{}])[0].get("message", "خطای ناشناخته")
                 raise Exception(f"خطا در دیپلوی ورکر: {error_msg}")
 
+        # فعال‌سازی subdomain routing
         try:
             async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}/subdomain", headers=headers, json={"enabled": True}) as resp:
                 pass
         except:
             pass
 
+        # گرفتن subdomain
         async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain", headers=headers) as resp:
             sub_data = await resp.json()
             subdomain = sub_data.get("result", {}).get("subdomain", "workers")
@@ -325,6 +330,7 @@ async def deploy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db_user["cf_account_id"],
             worker_name
         )
+        
         await save_panel(user.id, worker_name, panel_url, subdomain)
 
         keyboard = [
