@@ -103,7 +103,8 @@ def main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
         [InlineKeyboardButton("🔵 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
-        [InlineKeyboardButton("☁️ ثبت اکانت کلودفلر", callback_data="register_cf")],
+        [InlineKeyboardButton("🔵 ثبت اکانت کلودفلر", callback_data="register_cf")],
+        [InlineKeyboardButton("🟠 اکانت‌ها", callback_data="show_accounts")],
         [InlineKeyboardButton("🔴 پشتیبانی", url=SUPPORT_GROUP)]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -175,7 +176,7 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
         with open(ZEUS_SOURCE_FILE, "r", encoding="utf-8") as f:
             zeus_code = f.read()
 
-        # آپلود Worker (مسیر جدید API)
+        # آپلود Worker
         metadata = {
             "main_module": "zeus.js",
             "compatibility_date": "2024-09-23",
@@ -287,6 +288,98 @@ async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+# ================== هندلر جدید: اکانت‌ها ==================
+async def show_accounts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        async with aiosqlite.connect("ezpanel.db") as db:
+            async with db.execute("SELECT user_id, cf_email FROM users") as cursor:
+                rows = await cursor.fetchall()
+
+        if not rows:
+            await query.edit_message_text(
+                "❌ هیچ اکانتی در سیستم ثبت نشده است.",
+                reply_markup=main_menu_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        keyboard = []
+        for user_id, email in rows:
+            count = 0
+            async with aiosqlite.connect("ezpanel.db") as db:
+                async with db.execute("SELECT COUNT(*) FROM panels WHERE user_id = ?", (user_id,)) as c:
+                    count = (await c.fetchone())[0]
+
+            keyboard.append([
+                InlineKeyboardButton(f"☁️ {email} ({count} پنل)", callback_data=f"account_detail_{user_id}")
+            ])
+
+        keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
+
+        await query.edit_message_text(
+            "🧾 **لیست اکانت‌های ثبت‌شده**\n\n"
+            "هر اکانت را انتخاب کنید تا تعداد پنل‌های آن را ببینید:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    except Exception as e:
+        await query.edit_message_text(
+            f"❌ خطا در بارگذاری اکانت‌ها: {str(e)}",
+            reply_markup=main_menu_keyboard()
+        )
+
+async def show_account_panels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        data = query.data
+        if not data.startswith("account_detail_"):
+            return
+
+        target_user_id = int(data.split("_")[-1])
+
+        async with aiosqlite.connect("ezpanel.db") as db:
+            async with db.execute("SELECT cf_email FROM users WHERE user_id = ?", (target_user_id,)) as cu:
+                row = await cu.fetchone()
+                if not row:
+                    await query.edit_message_text("❌ اکانت یافت نشد.", reply_markup=main_menu_keyboard())
+                    return
+                email = row[0]
+
+            async with db.execute("SELECT * FROM panels WHERE user_id = ?", (target_user_id,)) as cursor:
+                panels = await cursor.fetchall()
+
+        if not panels:
+            text = f"✅ اکانت **{email}**\n\nهیچ پنلی ساخته نشده."
+            kb = [[InlineKeyboardButton("🔙 لیست اکانت‌ها", callback_data="show_accounts")]]
+        else:
+            keyboard = []
+            for p in panels:
+                keyboard.append([
+                    InlineKeyboardButton(f"🔗 {p[2]}", url=p[3])
+                ])
+            keyboard.append([InlineKeyboardButton("🔙 لیست اکانت‌ها", callback_data="show_accounts")])
+
+            text = f"✅ اکانت **{email}**\n\nتعداد پنل‌ها: **{len(panels)}**\n\nلیست پنل‌های ساخته‌شده:"
+
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+    except Exception as e:
+        await query.edit_message_text(
+            f"❌ خطا: {str(e)}",
+            reply_markup=main_menu_keyboard()
+        )
+
+# ================== هندلرهای قبلی ==================
 async def create_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -413,8 +506,10 @@ def main():
     app.add_handler(CallbackQueryHandler(deploy_callback, pattern="^deploy_"))
     app.add_handler(CallbackQueryHandler(manage_panels_callback, pattern="^manage_panels$"))
     app.add_handler(CallbackQueryHandler(back_main, pattern="^back_main$"))
+    app.add_handler(CallbackQueryHandler(show_accounts_callback, pattern="^show_accounts$"))
+    app.add_handler(CallbackQueryHandler(show_account_panels, pattern="^account_detail_"))
 
-    print("🤖 ربات EzPanelMaker شروع به کار کرد... (رنگ دکمه‌ها آپدیت شد)")
+    print("🤖 ربات EzPanelMaker شروع به کار کرد... (دکمه اکانت‌ها + رنگ‌های جدید)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
