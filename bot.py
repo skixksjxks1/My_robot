@@ -98,29 +98,29 @@ async def check_membership(user_id, bot):
     except Exception:
         return False
 
-# ================== کیبوردها ==================
+# ================== کیبوردها (رنگ‌های دقیق طبق عکس) ==================
 def main_menu_keyboard():
     keyboard = [
-        [InlineKeyboardButton("ساخت پنل جدید", callback_data="create_panel")],
-        [InlineKeyboardButton("مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
-        [InlineKeyboardButton("ثبت اکانت کلودفلر", callback_data="register_cf")],
-        [InlineKeyboardButton("پشتیبانی", url=SUPPORT_GROUP)]
+        [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
+        [InlineKeyboardButton("🔵 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
+        [InlineKeyboardButton("☁️ ثبت اکانت کلودفلر", callback_data="register_cf")],
+        [InlineKeyboardButton("🔴 پشتیبانی", url=SUPPORT_GROUP)]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def sponsor_keyboard():
     keyboard = [
-        [InlineKeyboardButton("ربات دانلودر اینستاگرام رایگان", url="https://t.me/FaraDownloaderBot")],
-        [InlineKeyboardButton("آموزش و فروش V2ray_company | VPN", url="https://t.me/V2ray_company")],
-        [InlineKeyboardButton("تایید عضویت و ورود به ربات", callback_data="check_join")]
+        [InlineKeyboardButton("📥 ربات دانلودر اینستاگرام رایگان", url="https://t.me/FaraDownloaderBot")],
+        [InlineKeyboardButton("📚 آموزش و فروش V2ray_company | VPN", url="https://t.me/V2ray_company")],
+        [InlineKeyboardButton("✅ تایید عضویت و ورود به ربات", callback_data="check_join")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
 def cf_register_keyboard():
     keyboard = [
-        [InlineKeyboardButton("ورود به حساب کلودفلر", url="https://dash.cloudflare.com/login")],
-        [InlineKeyboardButton("دریافت توکن اختصاصی زئوس", url="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_subdomain%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=Zeus-Deployer-Token")],
-        [InlineKeyboardButton("بازگشت", callback_data="back_main")]
+        [InlineKeyboardButton("🔐 ورود به حساب کلودفلر", url="https://dash.cloudflare.com/login")],
+        [InlineKeyboardButton("🎫 دریافت توکن اختصاصی زئوس", url="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_subdomain%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=Zeus-Deployer-Token")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -154,7 +154,6 @@ async def verify_cf_token(token: str):
 async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
-        # ایجاد یا دریافت D1 Database
         d1_payload = {"name": f"zeus-db-{worker_name}", "primary_location_hint": "WNAM"}
         async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database", headers=headers, json=d1_payload) as resp:
             d1_data = await resp.json()
@@ -171,18 +170,16 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
             else:
                 db_id = d1_data["result"]["uuid"]
 
-        # خواندن کد Worker
         with open(ZEUS_SOURCE_FILE, "r", encoding="utf-8") as f:
             zeus_code = f.read()
 
-        # آپلود Worker
+        form = aiohttp.FormData()
         metadata = {
             "main_module": "zeus.js",
             "compatibility_date": "2024-09-23",
             "compatibility_flags": ["nodejs_compat"],
             "bindings": [{"type": "d1", "name": "DB", "id": db_id}]
         }
-        form = aiohttp.FormData()
         form.add_field("metadata", json.dumps(metadata), content_type="application/json")
         form.add_field("zeus.js", zeus_code, filename="zeus.js", content_type="application/javascript+module")
 
@@ -192,14 +189,12 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
                 error_msg = deploy_data.get("errors", [{}])[0].get("message", "خطای ناشناخته")
                 raise Exception(f"خطا در دیپلوی ورکر: {error_msg}")
 
-        # فعال‌سازی subdomain routing
         try:
             async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}/subdomain", headers=headers, json={"enabled": True}) as resp:
                 pass
         except:
             pass
 
-        # گرفتن subdomain
         async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain", headers=headers) as resp:
             sub_data = await resp.json()
             subdomain = sub_data.get("result", {}).get("subdomain", "workers")
@@ -296,14 +291,14 @@ async def create_panel_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not db_user or not db_user.get("cf_token"):
         await query.edit_message_text(
             "⚠️ هیچ اکانت کلودفلری یافت نشد!\n\n"
-            "لطفاً ابتدا از منوی اصلی روی «ثبت اکانت کلودفلر» کلیک کنید.",
+            "لطفاً ابتدا از منوی اصلی روی «☁️ ثبت اکانت کلودفلر» کلیک کنید.",
             reply_markup=main_menu_keyboard()
         )
         return
 
     keyboard = [
-        [InlineKeyboardButton(db_user['cf_email'], callback_data=f"deploy_{db_user['user_id']}")],
-        [InlineKeyboardButton("بازگشت", callback_data="back_main")]
+        [InlineKeyboardButton(f"☁️ {db_user['cf_email']}", callback_data=f"deploy_{db_user['user_id']}")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")]
     ]
     await query.edit_message_text(
         "🚀 **تایید استقرار پنل**\n\nبرای ساخت پنل جدید روی اکانت زیر کلیک کنید:",
@@ -330,12 +325,11 @@ async def deploy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             db_user["cf_account_id"],
             worker_name
         )
-        
         await save_panel(user.id, worker_name, panel_url, subdomain)
 
         keyboard = [
-            [InlineKeyboardButton("ورود به پنل اختصاصی", url=panel_url)],
-            [InlineKeyboardButton("منوی اصلی", callback_data="back_main")]
+            [InlineKeyboardButton("🔗 ورود به پنل اختصاصی", url=panel_url)],
+            [InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_main")]
         ]
         await query.edit_message_text(
             f"✅ **پنل زئوس با موفقیت ساخته شد!**\n\n"
@@ -368,10 +362,10 @@ async def manage_panels_callback(update: Update, context: ContextTypes.DEFAULT_T
     keyboard = []
     for p in panels:
         keyboard.append([
-            InlineKeyboardButton(f"آپدیت {p['worker_name']}", callback_data=f"update_{p['id']}"),
-            InlineKeyboardButton(f"ورود به پنل", url=p['panel_url'])
+            InlineKeyboardButton(f"🔄 آپدیت {p['worker_name']}", callback_data=f"update_{p['id']}"),
+            InlineKeyboardButton(f"🔗 ورود به پنل", url=p['panel_url'])
         ])
-    keyboard.append([InlineKeyboardButton("بازگشت", callback_data="back_main")])
+    keyboard.append([InlineKeyboardButton("🔙 بازگشت", callback_data="back_main")])
 
     await query.edit_message_text(
         "🔵 **مدیریت پنل‌های شما**\n\nبرای آپدیت روی دکمه مربوطه بزنید:",
@@ -414,7 +408,7 @@ def main():
     app.add_handler(CallbackQueryHandler(manage_panels_callback, pattern="^manage_panels$"))
     app.add_handler(CallbackQueryHandler(back_main, pattern="^back_main$"))
 
-    print("🤖 ربات EzPanelMaker شروع به کار کرد... (رنگ کاملاً بدون ایموجی)")
+    print("🤖 ربات EzPanelMaker شروع به کار کرد... (رنگ دکمه‌ها آپدیت شد)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
