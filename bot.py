@@ -98,7 +98,7 @@ async def check_membership(user_id, bot):
     except Exception:
         return False
 
-# ================== کیبوردها (رنگ‌های دقیق طبق عکس) ==================
+# ================== کیبوردها ==================
 def main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("🟢 ساخت پنل جدید", callback_data="create_panel")],
@@ -124,15 +124,17 @@ def cf_register_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# ================== Cloudflare API ==================
+# ================== Cloudflare API (حل شده) ==================
 async def verify_cf_token(token: str):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
+        # Verify token
         async with session.get("https://api.cloudflare.com/client/v4/user/tokens/verify", headers=headers) as resp:
             data = await resp.json()
             if not data.get("success"):
                 return None, None, None
 
+        # Get accounts
         async with session.get("https://api.cloudflare.com/client/v4/accounts", headers=headers) as resp:
             acc_data = await resp.json()
             if not acc_data.get("success") or not acc_data.get("result"):
@@ -141,6 +143,7 @@ async def verify_cf_token(token: str):
             account_id = account["id"]
             email = account.get("name") or "Account"
 
+        # Get email
         try:
             async with session.get("https://api.cloudflare.com/client/v4/user", headers=headers) as resp:
                 user_data = await resp.json()
@@ -154,11 +157,14 @@ async def verify_cf_token(token: str):
 async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with aiohttp.ClientSession() as session:
+        # D1 Database
         d1_payload = {"name": f"zeus-db-{worker_name}", "primary_location_hint": "WNAM"}
-        async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database", headers=headers, json=d1_payload) as resp:
+        async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database",
+                                headers=headers, json=d1_payload) as resp:
             d1_data = await resp.json()
             if not d1_data.get("success"):
-                async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database", headers=headers) as list_resp:
+                async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database",
+                                       headers=headers) as list_resp:
                     list_data = await list_resp.json()
                     db_id = None
                     for db in list_data.get("result", []):
@@ -170,6 +176,7 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
             else:
                 db_id = d1_data["result"]["uuid"]
 
+        # Deploy Worker
         with open(ZEUS_SOURCE_FILE, "r", encoding="utf-8") as f:
             zeus_code = f.read()
 
@@ -183,19 +190,23 @@ async def deploy_zeus_panel(token: str, account_id: str, worker_name: str):
         form.add_field("metadata", json.dumps(metadata), content_type="application/json")
         form.add_field("zeus.js", zeus_code, filename="zeus.js", content_type="application/javascript+module")
 
-        async with session.put(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}", headers={"Authorization": f"Bearer {token}"}, data=form) as resp:
+        async with session.put(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}",
+                               headers={"Authorization": f"Bearer {token}"}, data=form) as resp:
             deploy_data = await resp.json()
             if not deploy_data.get("success"):
                 error_msg = deploy_data.get("errors", [{}])[0].get("message", "خطای ناشناخته")
                 raise Exception(f"خطا در دیپلوی ورکر: {error_msg}")
 
+        # Subdomain
         try:
-            async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}/subdomain", headers=headers, json={"enabled": True}) as resp:
+            async with session.post(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}/subdomain",
+                                    headers=headers, json={"enabled": True}) as resp:
                 pass
         except:
             pass
 
-        async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain", headers=headers) as resp:
+        async with session.get(f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/subdomain",
+                               headers=headers) as resp:
             sub_data = await resp.json()
             subdomain = sub_data.get("result", {}).get("subdomain", "workers")
 
@@ -388,7 +399,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================== اجرای ربات ==================
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).http_version("1.1").build()
 
     conv_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(register_cf_callback, pattern="^register_cf$")],
@@ -408,7 +419,7 @@ def main():
     app.add_handler(CallbackQueryHandler(manage_panels_callback, pattern="^manage_panels$"))
     app.add_handler(CallbackQueryHandler(back_main, pattern="^back_main$"))
 
-    print("🤖 ربات EzPanelMaker شروع به کار کرد... (رنگ دکمه‌ها آپدیت شد)")
+    print("🤖 ربات EzPanelMaker شروع به کار کرد... (حل مشکل NoneType)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
