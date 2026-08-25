@@ -37,7 +37,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 # ================== CONFIG ==================
-BOT_TOKEN = "cfut_BvUtaxczzJuZ7oJ9lte27kzxfT0NjfW7jB7hRUcXf2885768"
+BOT_TOKEN = "8669573949:AAGLHICtiGrNXJ-4SeRCwZbt3hKGgNcz5kQ"
 CHANNEL_USERNAME = "V2ray_company"  # کانال اجباری برای عضویت
 CHANNEL_LINK = "https://t.me/V2ray_company"
 SPONSOR_DOWNLOADER = "https://t.me/FaraDownloaderBot"
