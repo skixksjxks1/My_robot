@@ -1,357 +1,442 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-EzPanelMaker | ایزی پنل ماکر
-Telegram bot for automatic deployment of Zeus Panel on Cloudflare Workers + D1
+EzPanelMaker Bot - ربات ساخت پنل کانفیگ زئوس
+@EzPanelMakerBot
 """
 
 import os
-import re
 import json
-import asyncio
 import logging
+import asyncio
+import random
+import string
+import aiohttp
+import aiosqlite
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-import aiohttp
-import aiosqlite
-from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import Command, CommandStart, StateFilter
-from aiogram.types import (
-    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, FSInputFile
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardRemove,
 )
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.enums import ParseMode, ChatMemberStatus
-from aiogram.exceptions import TelegramBadRequest
-
-load_dotenv()
-
-# ==================== CONFIG ====================
-BOT_TOKEN = os.getenv("8669573949:AAGLHICtiGrNXJ-4SeRCwZbt3hKGgNcz5kQ")
-REQUIRED_CHANNEL = os.getenv("https://t.me/V2ray_company ", "").lstrip("@")
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("7277847715", "").split(",") if x.strip().isdigit()]
-ZEUS_SOURCE_URL = os.getenv(
-    "ZEUS_SOURCE_URL",
-    "https://raw.githubusercontent.com/panel-zeus/Z-E-U-S/main/Source.js"
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters,
 )
-DB_PATH = os.getenv("DB_PATH", "ezpanel.db")
+from telegram.constants import ParseMode
+from telegram.error import TelegramError
 
-if not BOT_TOKEN:ي
-    raise RuntimeError("BOT_TOKEN is required")
+# ================== CONFIG ==================
+BOT_TOKEN = "cfut_BvUtaxczzJuZ7oJ9lte27kzxfT0NjfW7jB7hRUcXf2885768"
+CHANNEL_USERNAME = "V2ray_company"  # کانال اجباری برای عضویت
+CHANNEL_LINK = "https://t.me/V2ray_company"
+SPONSOR_DOWNLOADER = "https://t.me/FaraDownloaderBot"
+SPONSOR_V2RAY = "https://t.me/V2ray_company"
 
+DB_PATH = "ezpanel.db"
+GITHUB_ZEUS_URL = "https://raw.githubusercontent.com/IR-NETLIFY/zeus/refs/heads/main/zeus.js"
+
+# Cloudflare API
+CF_API = "https://api.cloudflare.com/client/v4"
+
+# States
+WAITING_TOKEN = 1
+
+# Logging
 logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )
-logger = logging.getLogger("EzPanelMaker")
+logger = logging.getLogger(__name__)
 
-# ==================== STATES ====================
-class Form(StatesGroup):
-    waiting_cf_token = State()
-
-# ==================== DATABASE ====================
+# ================== DATABASE ==================
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                full_name TEXT,
-                joined_at TEXT DEFAULT CURRENT_TIMESTAMP
+                cf_token TEXT,
+                account_id TEXT,
+                account_name TEXT,
+                email TEXT,
+                created_at TEXT,
+                updated_at TEXT
             )
         """)
         await db.execute("""
-            CREATE TABLE IF NOT EXISTS cf_accounts (
+            CREATE TABLE IF NOT EXISTS panels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                account_id TEXT NOT NULL,
-                email TEXT,
-                token TEXT NOT NULL,
+                user_id INTEGER,
                 worker_name TEXT,
                 panel_url TEXT,
-                d1_id TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, account_id)
+                db_name TEXT,
+                created_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
             )
         """)
         await db.commit()
 
-async def save_user(user_id: int, username: str = None, full_name: str = None):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO users (user_id, username, full_name) VALUES (?, ?, ?)",
-            (user_id, username, full_name)
-        )
-        await db.execute(
-            "UPDATE users SET username = ?, full_name = ? WHERE user_id = ?",
-            (username, full_name, user_id)
-        )
-        await db.commit()
 
-async def get_user_accounts(user_id: int) -> List[Dict]:
+async def get_user(user_id: int) -> Optional[Dict]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM cf_accounts WHERE user_id = ? ORDER BY id DESC",
-            (user_id,)
-        )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
 
-async def get_account_by_id(acc_id: int, user_id: int) -> Optional[Dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM cf_accounts WHERE id = ? AND user_id = ?",
-            (acc_id, user_id)
-        )
-        row = await cursor.fetchone()
-        return dict(row) if row else None
 
-async def save_cf_account(user_id: int, account_id: str, email: str, token: str,
-                          worker_name: str = None, panel_url: str = None, d1_id: str = None):
+async def save_token(user_id: int, token: str, account_id: str, account_name: str, email: str = ""):
+    now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            INSERT INTO cf_accounts (user_id, account_id, email, token, worker_name, panel_url, d1_id, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(user_id, account_id) DO UPDATE SET
+            INSERT INTO users (user_id, cf_token, account_id, account_name, email, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                cf_token = excluded.cf_token,
+                account_id = excluded.account_id,
+                account_name = excluded.account_name,
                 email = excluded.email,
-                token = excluded.token,
-                worker_name = COALESCE(excluded.worker_name, worker_name),
-                panel_url = COALESCE(excluded.panel_url, panel_url),
-                d1_id = COALESCE(excluded.d1_id, d1_id),
-                updated_at = CURRENT_TIMESTAMP
-        """, (user_id, account_id, email, token, worker_name, panel_url, d1_id))
+                updated_at = excluded.updated_at
+        """, (user_id, token, account_id, account_name, email, now, now))
         await db.commit()
 
-async def update_panel_info(user_id: int, account_id: str, worker_name: str, panel_url: str, d1_id: str):
+
+async def save_panel(user_id: int, worker_name: str, panel_url: str, db_name: str = ""):
+    now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            UPDATE cf_accounts SET worker_name = ?, panel_url = ?, d1_id = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ? AND account_id = ?
-        """, (worker_name, panel_url, d1_id, user_id, account_id))
+            INSERT INTO panels (user_id, worker_name, panel_url, db_name, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, worker_name, panel_url, db_name, now))
         await db.commit()
 
-# ==================== CLOUDFLARE CLIENT ====================
-class CloudflareClient:
-    BASE = "https://api.cloudflare.com/client/v4"
 
-    def __init__(self, token: str):
-        self.token = token.strip()
-        self.headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json"
-        }
+async def get_user_panels(user_id: int) -> List[Dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM panels WHERE user_id = ? ORDER BY id DESC", (user_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
 
-    async def _request(self, method: str, path: str, **kwargs) -> Dict:
-        url = f"{self.BASE}{path}"
-        async with aiohttp.ClientSession() as session:
-            async with session.request(method, url, headers=self.headers, **kwargs) as resp:
-                data = await resp.json()
-                if not data.get("success", False) and resp.status >= 400:
-                    errors = data.get("errors", [])
-                    msg = errors[0].get("message", str(data)) if errors else str(data)
-                    raise Exception(f"CF API Error ({resp.status}): {msg}")
+
+# ================== CLOUDFLARE HELPERS ==================
+async def cf_request(method: str, endpoint: str, token: str, json_data: dict = None, form_data=None):
+    headers = {"Authorization": f"Bearer {token}"}
+    if json_data is not None:
+        headers["Content-Type"] = "application/json"
+    url = f"{CF_API}{endpoint}"
+    async with aiohttp.ClientSession() as session:
+        if form_data is not None:
+            async with session.request(method, url, headers={"Authorization": f"Bearer {token}"}, data=form_data) as resp:
+                try:
+                    data = await resp.json()
+                except:
+                    text = await resp.text()
+                    return {"success": False, "errors": [{"message": text}]}
+                return data
+        else:
+            async with session.request(method, url, headers=headers, json=json_data) as resp:
+                try:
+                    data = await resp.json()
+                except:
+                    text = await resp.text()
+                    return {"success": False, "errors": [{"message": text}]}
                 return data
 
-    async def verify_token(self) -> Dict:
-        return await self._request("GET", "/user/tokens/verify")
 
-    async def get_user(self) -> Dict:
-        data = await self._request("GET", "/user")
-        return data.get("result", {})
+async def get_cf_account(token: str) -> Dict:
+    data = await cf_request("GET", "/accounts", token)
+    if not data.get("success") or not data.get("result"):
+        raise Exception("توکن نامعتبر است یا دسترسی کافی ندارد. فقط از دکمه «دریافت توکن اختصاصی» استفاده کنید.")
+    acc = data["result"][0]
+    return {
+        "id": acc["id"],
+        "name": acc.get("name", "Unknown"),
+    }
 
-    async def get_accounts(self) -> List[Dict]:
-        data = await self._request("GET", "/accounts")
-        return data.get("result", [])
 
-    async def create_d1(self, account_id: str, name: str) -> Dict:
-        payload = {"name": name, "primary_location_hint": "wnam"}
-        data = await self._request("POST", f"/accounts/{account_id}/d1/database", json=payload)
-        return data.get("result", {})
+async def get_cf_user_email(token: str) -> str:
+    data = await cf_request("GET", "/user", token)
+    if data.get("success") and data.get("result"):
+        return data["result"].get("email", "")
+    return ""
 
-    async def list_d1(self, account_id: str) -> List[Dict]:
-        data = await self._request("GET", f"/accounts/{account_id}/d1/database")
-        return data.get("result", [])
 
-    async def get_workers_subdomain(self, account_id: str) -> Optional[str]:
-        try:
-            data = await self._request("GET", f"/accounts/{account_id}/workers/subdomain")
-            return data.get("result", {}).get("subdomain")
-        except Exception:
-            return None
+async def get_or_create_subdomain(token: str, account_id: str) -> str:
+    data = await cf_request("GET", f"/accounts/{account_id}/workers/subdomain", token)
+    if data.get("success") and data.get("result") and data["result"].get("subdomain"):
+        return data["result"]["subdomain"]
+    # create new
+    new_sub = "zeus-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    create = await cf_request("PUT", f"/accounts/{account_id}/workers/subdomain", token, {"subdomain": new_sub})
+    if not create.get("success"):
+        err = create.get("errors", [{}])[0].get("message", "خطای نامشخص")
+        raise Exception(f"خطا در ایجاد ساب‌دامین: {err}")
+    return new_sub
 
-    async def enable_workers_subdomain(self, account_id: str, subdomain: str = None) -> str:
-        existing = await self.get_workers_subdomain(account_id)
-        if existing:
-            return existing
-        import random, string
-        sub = subdomain or ("zeus" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8)))
-        try:
-            data = await self._request("PUT", f"/accounts/{account_id}/workers/subdomain", json={"subdomain": sub})
-            return data.get("result", {}).get("subdomain", sub)
-        except Exception:
-            return existing or sub
 
-    async def deploy_worker(self, account_id: str, script_name: str, script_content: str,
-                            d1_id: str, compatibility_date: str = "2024-11-01") -> Dict:
-        metadata = {
-            "main_module": "index.js",
-            "compatibility_date": compatibility_date,
-            "bindings": [{"type": "d1", "name": "DB", "id": d1_id}]
-        }
+async def create_d1(token: str, account_id: str, db_name: str) -> str:
+    data = await cf_request("POST", f"/accounts/{account_id}/d1/database", token, {"name": db_name})
+    if not data.get("success"):
+        err = data.get("errors", [{}])[0].get("message", "خطای نامشخص")
+        raise Exception(f"خطا در ایجاد دیتابیس: {err}")
+    return data["result"]["uuid"]
 
-        form = aiohttp.FormData()
-        form.add_field("metadata", json.dumps(metadata), content_type="application/json")
-        form.add_field("index.js", script_content, filename="index.js", content_type="application/javascript+module")
 
-        url = f"{self.BASE}/accounts/{account_id}/workers/scripts/{script_name}"
-        headers = {"Authorization": f"Bearer {self.token}"}
+async def deploy_worker(token: str, account_id: str, worker_name: str, db_uuid: str, zeus_code: str) -> bool:
+    metadata = {
+        "main_module": "zeus.js",
+        "compatibility_date": "2024-02-08",
+        "bindings": [
+            {"type": "d1", "name": "DB", "id": db_uuid},
+            {"type": "secret_text", "name": "CF_API_TOKEN", "text": token},
+            {"type": "secret_text", "name": "CF_ACCOUNT_ID", "text": account_id},
+        ],
+    }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.put(url, headers=headers, data=form) as resp:
-                data = await resp.json()
-                if not data.get("success", False):
-                    errors = data.get("errors", [])
-                    msg = errors[0].get("message", str(data)) if errors else str(data)
-                    raise Exception(f"Deploy failed ({resp.status}): {msg}")
-                return data.get("result", {})
+    form = aiohttp.FormData()
+    form.add_field(
+        "metadata",
+        json.dumps(metadata),
+        content_type="application/json",
+    )
+    form.add_field(
+        "zeus.js",
+        zeus_code,
+        filename="zeus.js",
+        content_type="application/javascript+module",
+    )
 
-    async def enable_workers_dev(self, account_id: str, script_name: str) -> bool:
-        try:
-            await self._request(
-                "POST",
-                f"/accounts/{account_id}/workers/scripts/{script_name}/subdomain",
-                json={"enabled": True}
-            )
-            return True
-        except Exception as e:
-            logger.warning(f"enable_workers_dev warning: {e}")
-            return False
+    url = f"{CF_API}/accounts/{account_id}/workers/scripts/{worker_name}"
+    headers = {"Authorization": f"Bearer {token}"}
 
-# ==================== HELPERS ====================
-async def download_zeus_source() -> str:
     async with aiohttp.ClientSession() as session:
-        async with session.get(ZEUS_SOURCE_URL, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+        async with session.put(url, headers=headers, data=form) as resp:
+            try:
+                data = await resp.json()
+            except Exception:
+                text = await resp.text()
+                raise Exception(f"خطا در دیپلوی: {text[:300]}")
+            if not data.get("success"):
+                err = data.get("errors", [{}])[0].get("message", "خطای نامشخص")
+                raise Exception(f"خطا در دیپلوی ورکر: {err}")
+            return True
+
+
+async def enable_subdomain_route(token: str, account_id: str, worker_name: str):
+    data = await cf_request(
+        "POST",
+        f"/accounts/{account_id}/workers/scripts/{worker_name}/subdomain",
+        token,
+        {"enabled": True},
+    )
+    if not data.get("success") and data.get("errors"):
+        # sometimes already enabled
+        pass
+
+
+async def list_workers(token: str, account_id: str) -> List[str]:
+    data = await cf_request("GET", f"/accounts/{account_id}/workers/scripts", token)
+    if not data.get("success"):
+        return []
+    return [s["id"] for s in data.get("result", []) if s.get("id", "").startswith("zeus-panel-")]
+
+
+async def update_worker(token: str, account_id: str, worker_name: str, zeus_code: str) -> bool:
+    # Get existing bindings
+    bind_data = await cf_request("GET", f"/accounts/{account_id}/workers/scripts/{worker_name}/bindings", token)
+    if not bind_data.get("success"):
+        raise Exception("نتوانست بایندینگ‌ها را دریافت کند")
+
+    new_bindings = []
+    for b in bind_data.get("result", []):
+        if b.get("type") == "d1":
+            new_bindings.append({
+                "type": "d1",
+                "name": b.get("name", "DB"),
+                "id": b.get("database_id") or b.get("id"),
+            })
+        elif b.get("name") == "CF_API_TOKEN":
+            new_bindings.append({"type": "secret_text", "name": "CF_API_TOKEN", "text": token})
+        elif b.get("name") == "CF_ACCOUNT_ID":
+            new_bindings.append({"type": "secret_text", "name": "CF_ACCOUNT_ID", "text": account_id})
+        elif b.get("type") == "secret_text":
+            new_bindings.append({"type": "secret_text", "name": b["name"], "text": b.get("text", "")})
+
+    names = {b["name"] for b in new_bindings}
+    if "CF_API_TOKEN" not in names:
+        new_bindings.append({"type": "secret_text", "name": "CF_API_TOKEN", "text": token})
+    if "CF_ACCOUNT_ID" not in names:
+        new_bindings.append({"type": "secret_text", "name": "CF_ACCOUNT_ID", "text": account_id})
+
+    metadata = {
+        "main_module": "zeus.js",
+        "compatibility_date": "2024-02-08",
+        "bindings": new_bindings,
+    }
+
+    form = aiohttp.FormData()
+    form.add_field("metadata", json.dumps(metadata), content_type="application/json")
+    form.add_field(
+        "zeus.js",
+        zeus_code,
+        filename="zeus.js",
+        content_type="application/javascript+module",
+    )
+
+    url = f"{CF_API}/accounts/{account_id}/workers/scripts/{worker_name}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with aiohttp.ClientSession() as session:
+        async with session.put(url, headers=headers, data=form) as resp:
+            data = await resp.json()
+            if not data.get("success"):
+                err = data.get("errors", [{}])[0].get("message", "خطای نامشخص")
+                raise Exception(f"خطا در آپدیت: {err}")
+            return True
+
+
+async def fetch_zeus_code() -> str:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(GITHUB_ZEUS_URL + f"?t={int(datetime.utcnow().timestamp())}") as resp:
             if resp.status != 200:
-                raise Exception(f"Failed to download Zeus source: HTTP {resp.status}")
+                raise Exception("خطا در دریافت سورس پنل از گیت‌هاب")
             return await resp.text()
 
-async def check_channel_membership(bot: Bot, user_id: int) -> bool:
-    if not REQUIRED_CHANNEL:
-        return True
+
+# ================== KEYBOARDS ==================
+def sponsor_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 ربات دانلودر اینستاگرام رایگان", url=SPONSOR_DOWNLOADER)],
+        [InlineKeyboardButton("📚 آموزش و فروش V2ray | VPN", url=SPONSOR_V2RAY)],
+        [InlineKeyboardButton("✅ عضویت در کانال (الزامی)", url=CHANNEL_LINK)],
+        [InlineKeyboardButton("🔄 بررسی عضویت و ادامه", callback_data="check_join")],
+    ])
+
+
+def main_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 ساخت پنل جدید", callback_data="new_panel")],
+        [InlineKeyboardButton("🔧 مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
+        [InlineKeyboardButton("➕ ثبت اکانت کلودفلر", callback_data="register_cf")],
+    ])
+
+
+def back_to_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data="main_menu")],
+    ])
+
+
+def cf_register_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔐 ورود به حساب کلودفلر", url="https://dash.cloudflare.com/login")],
+        [InlineKeyboardButton(
+            "🎫 دریافت توکن اختصاصی برای زئوس",
+            url="https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22workers_subdomain%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%5D&accountId=*&zoneId=all&name=Zeus-Deployer-Token"
+        )],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")],
+    ])
+
+
+# ================== CHECK JOIN ==================
+async def is_member(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
-        member = await bot.get_chat_member(chat_id=f"@{REQUIRED_CHANNEL}", user_id=user_id)
-        return member.status in (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR)
-    except Exception as e:
-        logger.warning(f"Membership check failed: {e}")
+        member = await context.bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
+        return member.status in ("member", "administrator", "creator")
+    except TelegramError as e:
+        logger.warning(f"Cannot check membership: {e}")
+        # If bot is not admin in channel, we cannot check. For production, bot MUST be admin.
         return False
 
-def main_menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 ساخت پنل جدید", callback_data="new_panel")],
-        [InlineKeyboardButton(text="⚙️ مدیریت و آپدیت پنل‌ها", callback_data="manage_panels")],
-        [InlineKeyboardButton(text="➕ ثبت اکانت کلودفلر", callback_data="add_cf_account")],
-    ])
 
-def sponsor_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📥 ربات دانلودر اینستاگرام رایگان", url="https://t.me/FaraDownloaderBot")],
-        [InlineKeyboardButton(text="🔐 آموزش و فروش V2ray_company | VPN", url="https://t.me/V2ray_company")],
-        [InlineKeyboardButton(text="✅ پشتیبانی", callback_data="support")],          # رنگ قرمز
-    ])
-
-def cf_token_kb() -> InlineKeyboardMarkup:
-    token_url = (
-        "https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys="
-        "%5B%7B%22key%22%3A%22workers_scripts%22%2C%22type%22%3A%22edit%22%7D%2C"
-        "%7B%22key%22%3A%22workers_kv_storage%22%2C%22type%22%3A%22edit%22%7D%2C"
-        "%7B%22key%22%3A%22d1%22%2C%22type%22%3A%22edit%22%7D%2C"
-        "%7B%22key%22%3A%22account_settings%22%2C%22type%22%3A%22read%22%7D%2C"
-        "%7B%22key%22%3A%22workers_subdomain%22%2C%22type%22%3A%22edit%22%7D%2C"
-        "%7B%22key%22%3A%22account_analytics%22%2C%22type%22%3A%22read%22%7D%2C"
-        "%7B%22key%22%3A%22user_details%22%2C%22type%22%3A%22read%22%7D%5D"
-        "&accountId=*&zoneId=all&name=Zeus-Deployer-Token"
-    )
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔑 ورود به حساب کلودفلر", url="https://dash.cloudflare.com/login")],
-        [InlineKeyboardButton(text="🎫 دریافت توکن کلودفلر برای زئوس", url=token_url)],
-        [InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_main")],
-    ])
-
-def accounts_kb(accounts: List[Dict], prefix: str = "deploy") -> InlineKeyboardMarkup:
-    buttons = []
-    for acc in accounts:
-        email = acc.get("email") or acc.get("account_id")[:8]
-        label = f"☁️ {email}"
-        if acc.get("panel_url"):
-            label += " ✅"
-        buttons.append([InlineKeyboardButton(text=label, callback_data=f"{prefix}:{acc['id']}")])
-    buttons.append([InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_main")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-# ==================== ROUTERS ====================
-router = Router()
-
-@router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext, bot: Bot):
-    await state.clear()
-    await save_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
-
-    if REQUIRED_CHANNEL:
-        is_member = await check_channel_membership(bot, message.from_user.id)
-        if not is_member:
-            text = (
-                "⚠️ <b>عضویت اجباری در کانال</b>\n\n"
-                "برای استفاده از ربات <b>حتماً</b> باید در کانال زیر عضو شوید.\n"
-                "بعد از عضویت روی دکمه «بررسی عضویت» بزنید.\n\n"
-                "بدون عضویت امکان استفاده از ربات وجود ندارد."
-            )
-            await message.answer(text, reply_markup=sponsor_kb(), parse_mode=ParseMode.HTML)
-            return
-
+# ================== HANDLERS ==================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
     text = (
-        f"سلام <b>{message.from_user.first_name}</b> 👋\n\n"
-        "به ربات <b>EzPanelMaker | ایزی پنل ماکر</b> خوش آمدید.\n\n"
-        "با این ربات می‌تونید پنل <b>Zeus</b> رو به صورت خودکار روی اکانت کلودفلر خودتون دیپلوی کنید.\n\n"
-        "از منوی زیر گزینه مورد نظر را انتخاب کنید:"
+        f"سلام {user.first_name} عزیز 👋\n\n"
+        "⚡ به ربات <b>EzPanelMaker | ایزی پنل ماکر</b> خوش آمدید!\n\n"
+        "این ربات برای ساخت و مدیریت پنل کانفیگ <b>زئوس (Zeus Panel)</b> روی کلودفلر ساخته شده است.\n\n"
+        "⚠️ <b>قبل از استفاده حتماً در کانال اسپانسر عضو شوید:</b>"
     )
-    await message.answer(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=sponsor_keyboard(),
+        disable_web_page_preview=True,
+    )
 
-@router.callback_query(F.data == "check_join")
-async def cb_check_join(callback: CallbackQuery, bot: Bot):
-    is_member = await check_channel_membership(bot, callback.from_user.id)
-    if is_member:
-        await callback.message.edit_text(
-            f"✅ عضویت شما تایید شد!\n\nسلام <b>{callback.from_user.first_name}</b>\n"
-            "از منوی زیر گزینه مورد نظر را انتخاب کنید:",
-            reply_markup=main_menu_kb(),
-            parse_mode=ParseMode.HTML
+
+async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if not await is_member(user_id, context):
+        await query.edit_message_text(
+            "❌ <b>شما هنوز عضو کانال نشده‌اید!</b>\n\n"
+            "لطفاً روی دکمه «عضویت در کانال (الزامی)» کلیک کنید و بعد از عضویت، "
+            "دکمه «بررسی عضویت و ادامه» را بزنید.\n\n"
+            "این کار برای حمایت از سازنده و ادامه فعالیت ربات ضروری است.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=sponsor_keyboard(),
         )
-    else:
-        await callback.answer("❌ هنوز در کانال عضو نشده‌اید! لطفاً ابتدا عضو شوید.", show_alert=True)
+        return
 
-@router.callback_query(F.data == "back_main")
-async def cb_back_main(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text(
-        "منوی اصلی:\nاز گزینه‌های زیر انتخاب کنید:",
-        reply_markup=main_menu_kb()
+    await query.edit_message_text(
+        "✅ عضویت شما تایید شد!\n\n"
+        "از گزینه‌های زیر جهت ساخت یا مدیریت پنل‌های خود استفاده کنید:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu_keyboard(),
     )
 
-@router.callback_query(F.data == "add_cf_account")
-async def cb_add_cf(callback: CallbackQuery, state: FSMContext):
+
+async def main_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if not await is_member(user_id, context):
+        await query.edit_message_text(
+            "❌ عضویت شما منقضی شده یا لغو شده است.\nلطفاً دوباره عضو کانال شوید.",
+            reply_markup=sponsor_keyboard(),
+        )
+        return
+
+    await query.edit_message_text(
+        "از گزینه‌های زیر جهت ساخت یا مدیریت پنل‌های خود استفاده کنید:",
+        reply_markup=main_menu_keyboard(),
+    )
+
+
+async def register_cf_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if not await is_member(user_id, context):
+        await query.edit_message_text("❌ ابتدا در کانال عضو شوید.", reply_markup=sponsor_keyboard())
+        return
+
     text = (
         "☁️ <b>اتصال اکانت جدید کلودفلر به زئوس</b> ☁️\n\n"
         "⚠️ <b>توجه بسیار مهم:</b>\n"
         "برای جلوگیری از بروز خطا، لطفاً مراحل زیر را به ترتیب انجام دهید. "
         "اگر در مرورگر خود لاگین نیستید، حتماً از گام اول شروع کنید.\n\n"
         "🔹 <b>گام اول:</b>\n"
-        "روی دکمه «ورود به کلودفلر» کلیک کنید و وارد حساب کاربری خود شوید.\n"
+        "روی دکمه «ورود به حساب کلودفلر» کلیک کنید و وارد حساب کاربری خود شوید.\n"
         "(پس از ورود موفق، حتماً دوباره به همینجا در تلگرام برگردید)\n\n"
         "🔹 <b>گام دوم:</b>\n"
         "حالا روی دکمه «دریافت توکن اختصاصی» کلیک کنید.\n"
@@ -361,247 +446,298 @@ async def cb_add_cf(callback: CallbackQuery, state: FSMContext):
         "توکن تولید شده را کپی کرده و دقیقاً در همین چت ارسال کنید.\n\n"
         "👇 منتظر دریافت توکن شما هستم... (برای لغو عملیات، دکمه بازگشت را بزنید)"
     )
-    await state.set_state(Form.waiting_cf_token)
-    await callback.message.edit_text(text, reply_markup=cf_token_kb(), parse_mode=ParseMode.HTML)
+    await query.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=cf_register_keyboard(),
+        disable_web_page_preview=True,
+    )
+    context.user_data["state"] = WAITING_TOKEN
 
-@router.message(Form.waiting_cf_token)
-async def process_cf_token(message: Message, state: FSMContext):
-    token = message.text.strip()
-    if not re.match(r"^[A-Za-z0-9_-]{40,}$", token):
-        await message.answer("❌ توکن نامعتبر به نظر می‌رسد. لطفاً توکن کامل را ارسال کنید یا روی بازگشت بزنید.")
+
+async def handle_token_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("state") != WAITING_TOKEN:
         return
 
-    wait_msg = await message.answer("⏳ در حال بررسی توکن...")
+    user_id = update.effective_user.id
+    token = update.message.text.strip()
+
+    if not token or len(token) < 30:
+        await update.message.reply_text(
+            "❌ توکن نامعتبر به نظر می‌رسد. لطفاً توکن کامل را ارسال کنید یا دکمه بازگشت را بزنید.",
+            reply_markup=back_to_main_keyboard(),
+        )
+        return
+
+    wait_msg = await update.message.reply_text("⏳ در حال بررسی و تایید توکن...")
 
     try:
-        cf = CloudflareClient(token)
+        acc = await get_cf_account(token)
+        email = await get_cf_user_email(token)
+        display_name = email or acc["name"] or "Account"
 
-        accounts = await cf.get_accounts()
-        if not accounts:
-            await wait_msg.edit_text("❌ هیچ اکانتی در این توکن یافت نشد.")
-            return
+        await save_token(user_id, token, acc["id"], acc["name"], email)
 
-        account = accounts[0]
-        account_id = account["id"]
-        email = account.get("name") or account_id[:12]
-
-        try:
-            user_info = await cf.get_user()
-            if user_info.get("email"):
-                email = user_info["email"]
-        except Exception:
-            pass
-
-        await save_cf_account(
-            user_id=message.from_user.id,
-            account_id=account_id,
-            email=email,
-            token=token
-        )
-        await state.clear()
+        context.user_data.pop("state", None)
 
         await wait_msg.edit_text(
-            f"✅ توکن اکانت «{email}» با موفقیت تایید و ذخیره شد!\n\n"
-            f"شناسه اکانت: <code>{account_id}</code>\n\n"
-            "حالا می‌توانید از منوی اصلی گزینه «ساخت پنل جدید» را انتخاب کنید.",
-            reply_markup=main_menu_kb(),
-            parse_mode=ParseMode.HTML
+            f"✅ توکن اکانت «{display_name}» با موفقیت تایید و ذخیره شد!",
+            reply_markup=main_menu_keyboard(),
         )
     except Exception as e:
-        logger.exception("Token verification failed")
-        error_text = str(e)
-        if "403" in error_text or "Unauthorized" in error_text:
-            error_text = "دسترسی غیرمجاز (403)\n\nلطفاً توکن را دوباره با دسترسی کامل بسازید."
-        await wait_msg.edit_text(f"❌ خطا در بررسی توکن:\n<code>{error_text[:350]}</code>", parse_mode=ParseMode.HTML)
+        logger.exception("Token validation failed")
+        await wait_msg.edit_text(
+            f"❌ خطا در تایید توکن:\n<code>{str(e)}</code>\n\n"
+            "لطفاً مطمئن شوید از دکمه «دریافت توکن اختصاصی برای زئوس» استفاده کرده‌اید.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=cf_register_keyboard(),
+        )
 
-@router.callback_query(F.data == "new_panel")
-async def cb_new_panel(callback: CallbackQuery):
-    accounts = await get_user_accounts(callback.from_user.id)
-    if not accounts:
-        await callback.message.edit_text(
-            "⚠️ هیچ اکانت کلودفلری یافت نشد!\n\nلطفاً ابتدا از منوی اصلی روی «➕ ثبت اکانت کلودفلر» کلیک کنید.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="➕ ثبت اکانت کلودفلر", callback_data="add_cf_account")],
-                [InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_main")]
-            ])
+
+async def new_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if not await is_member(user_id, context):
+        await query.edit_message_text("❌ ابتدا در کانال عضو شوید.", reply_markup=sponsor_keyboard())
+        return
+
+    user = await get_user(user_id)
+    if not user or not user.get("cf_token"):
+        await query.edit_message_text(
+            "⚠️ هیچ اکانت کلودفلری یافت نشد!\n"
+            "لطفاً ابتدا از منوی اصلی روی «➕ ثبت اکانت کلودفلر» کلیک کنید.",
+            reply_markup=main_menu_keyboard(),
         )
         return
 
-    await callback.message.edit_text(
-        "🚀 <b>تایید استقرار پنل</b>\n\nبرای ساخت پنل جدید روی اکانت زیر کلیک کنید:",
-        reply_markup=accounts_kb(accounts, prefix="deploy"),
-        parse_mode=ParseMode.HTML
+    display = user.get("email") or user.get("account_name") or "اکانت شما"
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"☁️ {display}", callback_data=f"deploy:{user['account_id']}")],
+        [InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")],
+    ])
+
+    await query.edit_message_text(
+        "🚀 <b>تایید استقرار پنل</b>\n\n"
+        "برای ساخت پنل جدید روی اکانت زیر کلیک کنید:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=kb,
     )
 
-@router.callback_query(F.data.startswith("deploy:"))
-async def cb_deploy(callback: CallbackQuery):
-    acc_id = int(callback.data.split(":")[1])
-    account = await get_account_by_id(acc_id, callback.from_user.id)
-    if not account:
-        await callback.answer("اکانت یافت نشد", show_alert=True)
+
+async def deploy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    user = await get_user(user_id)
+    if not user or not user.get("cf_token"):
+        await query.edit_message_text(
+            "⚠️ هیچ اکانت کلودفلری یافت نشد!",
+            reply_markup=main_menu_keyboard(),
+        )
         return
 
-    await callback.message.edit_text("⏳ <b>درحال ساخت پنل زئوس...</b>\nلطفاً چند لحظه صبر کنید.", parse_mode=ParseMode.HTML)
+    await query.edit_message_text(
+        "⏳ <b>درحال ساخت پنل زئوس...</b>\n\n"
+        "لطفاً چند لحظه صبر کنید. این عملیات ممکن است ۳۰ تا ۶۰ ثانیه طول بکشد.",
+        parse_mode=ParseMode.HTML,
+    )
+
+    token = user["cf_token"]
+    account_id = user["account_id"]
+    display = user.get("email") or user.get("account_name") or "اکانت شما"
 
     try:
-        cf = CloudflareClient(account["token"])
-        account_id = account["account_id"]
-        email = account.get("email") or "user"
+        # 1. subdomain
+        dev_sub = await get_or_create_subdomain(token, account_id)
 
-        await callback.message.edit_text("📥 دانلود سورس پنل زئوس...")
-        source = await download_zeus_source()
+        # 2. unique names
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+        worker_name = f"zeus-panel-{suffix}"
+        db_name = f"zeus-db-{suffix}"
 
-        await callback.message.edit_text("🗄️ ساخت دیتابیس D1...")
-        d1_name = f"zeus-db-{callback.from_user.id}-{int(datetime.now().timestamp()) % 100000}"
-        existing_d1s = await cf.list_d1(account_id)
-        d1_id = None
-        for d in existing_d1s:
-            if d.get("name", "").startswith("zeus-db"):
-                d1_id = d["uuid"]
-                break
-        if not d1_id:
-            d1 = await cf.create_d1(account_id, d1_name)
-            d1_id = d1.get("uuid")
+        # 3. create D1
+        db_uuid = await create_d1(token, account_id, db_name)
+        await asyncio.sleep(1.5)
 
-        worker_name = f"zeus-{callback.from_user.id}-{int(datetime.now().timestamp()) % 10000}"
-        worker_name = re.sub(r"[^a-z0-9-]", "", worker_name.lower())[:50]
+        # 4. fetch code
+        zeus_code = await fetch_zeus_code()
 
-        await callback.message.edit_text("🚀 آپلود و فعال‌سازی ورکر...")
-        await cf.deploy_worker(account_id, worker_name, source, d1_id)
-        await cf.enable_workers_dev(account_id, worker_name)
+        # 5. deploy
+        await deploy_worker(token, account_id, worker_name, db_uuid, zeus_code)
 
-        subdomain = await cf.get_workers_subdomain(account_id)
-        if not subdomain:
-            subdomain = await cf.enable_workers_subdomain(account_id)
+        # 6. enable route
+        await enable_subdomain_route(token, account_id, worker_name)
 
-        panel_url = f"https://{worker_name}.{subdomain}.workers.dev/panel"
+        panel_url = f"https://{worker_name}.{dev_sub}.workers.dev/panel"
 
-        await update_panel_info(
-            callback.from_user.id, account_id,
-            worker_name, panel_url, d1_id
-        )
+        # save
+        await save_panel(user_id, worker_name, panel_url, db_name)
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌐 ورود به پنل اختصاصی", url=panel_url)],
-            [InlineKeyboardButton(text="🔙 منوی اصلی", callback_data="back_main")]
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔗 ورود به پنل اختصاصی", url=panel_url)],
+            [InlineKeyboardButton("🔙 منوی اصلی", callback_data="main_menu")],
         ])
 
-        await callback.message.edit_text(
+        await query.edit_message_text(
             f"✅ <b>پنل زئوس با موفقیت ساخته شد!</b>\n\n"
-            f"👤 اکانت: <code>{email}</code>\n"
+            f"👤 اکانت: <code>{display}</code>\n"
             f"🔗 آدرس پنل:\n<code>{panel_url}</code>\n\n"
-            f"⚠️ پس از ورود اولین بار، یک پسورد ادمین برای پنل تنظیم کنید و آن را یادداشت کنید.",
+            f"از دکمه زیر برای ورود به پنل استفاده کنید.",
+            parse_mode=ParseMode.HTML,
             reply_markup=kb,
-            parse_mode=ParseMode.HTML
+            disable_web_page_preview=True,
         )
     except Exception as e:
         logger.exception("Deploy failed")
-        await callback.message.edit_text(
-            f"❌ خطا در ساخت پنل:\n<code>{str(e)[:400]}</code>\n\nاگر خطا مربوط به دسترسی است، مطمئن شوید توکن تمام پرمیشن‌های لازم را دارد.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_main")]
-            ]),
-            parse_mode=ParseMode.HTML
+        await query.edit_message_text(
+            f"❌ <b>خطا در ساخت پنل:</b>\n<code>{str(e)}</code>\n\n"
+            "اگر خطای مربوط به Terms of Service دیدید، ابتدا در داشبورد کلودفلر "
+            "توافق‌نامه Workers را بپذیرید.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_keyboard(),
         )
 
-@router.callback_query(F.data == "manage_panels")
-async def cb_manage(callback: CallbackQuery):
-    accounts = await get_user_accounts(callback.from_user.id)
-    if not accounts:
-        await callback.message.edit_text(
+
+async def manage_panels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if not await is_member(user_id, context):
+        await query.edit_message_text("❌ ابتدا در کانال عضو شوید.", reply_markup=sponsor_keyboard())
+        return
+
+    user = await get_user(user_id)
+    if not user or not user.get("cf_token"):
+        await query.edit_message_text(
             "⚠️ هیچ اکانت کلودفلری یافت نشد!",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_main")]
-            ])
+            reply_markup=main_menu_keyboard(),
         )
         return
 
-    deployed = [a for a in accounts if a.get("panel_url")]
-    if not deployed:
-        await callback.message.edit_text(
-            "⚠️ هنوز هیچ پنلی ساخته نشده است.\nابتدا از گزینه «ساخت پنل جدید» استفاده کنید.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🚀 ساخت پنل جدید", callback_data="new_panel")],
-                [InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_main")]
-            ])
+    # Try live list + local
+    try:
+        workers = await list_workers(user["cf_token"], user["account_id"])
+    except Exception:
+        workers = []
+
+    panels = await get_user_panels(user_id)
+
+    if not workers and not panels:
+        await query.edit_message_text(
+            "⚠️ هیچ پنلی یافت نشد!\nابتدا یک پنل جدید بسازید.",
+            reply_markup=main_menu_keyboard(),
         )
         return
 
-    await callback.message.edit_text(
-        "⚙️ <b>مدیریت و آپدیت پنل‌ها</b>\n\nروی پنل مورد نظر کلیک کنید تا آپدیت شود:",
-        reply_markup=accounts_kb(deployed, prefix="update"),
-        parse_mode=ParseMode.HTML
+    buttons = []
+    # Prefer live workers
+    seen = set()
+    for w in workers:
+        seen.add(w)
+        buttons.append([InlineKeyboardButton(f"🔄 آپدیت پنل: {w}", callback_data=f"update:{w}")])
+
+    for p in panels:
+        wn = p["worker_name"]
+        if wn not in seen:
+            buttons.append([InlineKeyboardButton(f"🔄 آپدیت پنل: {wn}", callback_data=f"update:{wn}")])
+            if p.get("panel_url"):
+                buttons.append([InlineKeyboardButton(f"🔗 باز کردن: {wn}", url=p["panel_url"])])
+
+    buttons.append([InlineKeyboardButton("🔙 بازگشت", callback_data="main_menu")])
+
+    await query.edit_message_text(
+        "🔧 <b>مدیریت و آپدیت پنل‌ها</b>\n\n"
+        "روی دکمه آپدیت هر پنل کلیک کنید تا به آخرین نسخه زئوس به‌روزرسانی شود:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(buttons),
     )
 
-@router.callback_query(F.data.startswith("update:"))
-async def cb_update(callback: CallbackQuery):
-    acc_id = int(callback.data.split(":")[1])
-    account = await get_account_by_id(acc_id, callback.from_user.id)
-    if not account or not account.get("worker_name"):
-        await callback.answer("پنل یافت نشد", show_alert=True)
+
+async def update_panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    worker_name = query.data.split(":", 1)[1]
+    user = await get_user(user_id)
+    if not user:
+        await query.edit_message_text("⚠️ اکانت یافت نشد.", reply_markup=main_menu_keyboard())
         return
 
-    await callback.message.edit_text("⏳ در حال آپدیت پنل زئوس...")
+    await query.edit_message_text(
+        f"⏳ در حال آپدیت پنل <code>{worker_name}</code>...\nلطفاً صبر کنید.",
+        parse_mode=ParseMode.HTML,
+    )
 
     try:
-        cf = CloudflareClient(account["token"])
-        source = await download_zeus_source()
-        d1_id = account.get("d1_id")
-        if not d1_id:
-            d1s = await cf.list_d1(account["account_id"])
-            for d in d1s:
-                if d.get("name", "").startswith("zeus"):
-                    d1_id = d["uuid"]
-                    break
-            if not d1_id:
-                raise Exception("D1 مربوط به این پنل پیدا نشد")
+        zeus_code = await fetch_zeus_code()
+        await update_worker(user["cf_token"], user["account_id"], worker_name, zeus_code)
 
-        await cf.deploy_worker(
-            account["account_id"],
-            account["worker_name"],
-            source,
-            d1_id
-        )
+        # try get url
+        try:
+            sub = await get_or_create_subdomain(user["cf_token"], user["account_id"])
+            panel_url = f"https://{worker_name}.{sub}.workers.dev/panel"
+        except:
+            panel_url = None
 
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🌐 ورود به پنل", url=account["panel_url"])],
-            [InlineKeyboardButton(text="🔙 منوی اصلی", callback_data="back_main")]
-        ])
-        await callback.message.edit_text(
-            f"✅ پنل با موفقیت آپدیت شد!\n\n🔗 <code>{account['panel_url']}</code>",
-            reply_markup=kb,
-            parse_mode=ParseMode.HTML
+        kb_buttons = []
+        if panel_url:
+            kb_buttons.append([InlineKeyboardButton("🔗 ورود به پنل", url=panel_url)])
+        kb_buttons.append([InlineKeyboardButton("🔙 منوی اصلی", callback_data="main_menu")])
+
+        await query.edit_message_text(
+            f"✅ پنل <code>{worker_name}</code> با موفقیت به آخرین نسخه آپدیت شد!",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(kb_buttons),
         )
     except Exception as e:
         logger.exception("Update failed")
-        await callback.message.edit_text(
-            f"❌ خطا در آپدیت:\n<code>{str(e)[:300]}</code>",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_main")]
-            ]),
-            parse_mode=ParseMode.HTML
+        await query.edit_message_text(
+            f"❌ خطا در آپدیت:\n<code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=main_menu_keyboard(),
         )
 
-@router.callback_query(F.data == "support")
-async def cb_support(callback: CallbackQuery):
-    try:
-        await callback.bot.send_message(
-            chat_id="https://t.me/+JArqswroP-QyMTJk",
-            text="💬 کاربر از دکمه پشتیبانی استفاده کرد."
-        )
-        await callback.answer("✅ شما به گروه پشتیبانی منتقل شدید!", show_alert=True)
-    except Exception as e:
-        await callback.answer(f"❌ خطا: {str(e)}", show_alert=True)
 
-# ==================== MAIN ====================
-async def main():
-    await init_db()
-    bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(router)
+async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("state", None)
+    if update.message:
+        await update.message.reply_text("عملیات لغو شد.", reply_markup=main_menu_keyboard())
+    return ConversationHandler.END
 
-    logger.info("EzPanelMaker Bot starting...")
-    await dp.start_polling(bot)
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+
+# ================== MAIN ==================
+def main():
+    asyncio.get_event_loop().run_until_complete(init_db())
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(check_join_callback, pattern="^check_join$"))
+    app.add_handler(CallbackQueryHandler(main_menu_callback, pattern="^main_menu$"))
+    app.add_handler(CallbackQueryHandler(register_cf_callback, pattern="^register_cf$"))
+    app.add_handler(CallbackQueryHandler(new_panel_callback, pattern="^new_panel$"))
+    app.add_handler(CallbackQueryHandler(deploy_callback, pattern="^deploy:"))
+    app.add_handler(CallbackQueryHandler(manage_panels_callback, pattern="^manage_panels$"))
+    app.add_handler(CallbackQueryHandler(update_panel_callback, pattern="^update:"))
+
+    # Token messages (only when waiting)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_token_message))
+
+    app.add_error_handler(error_handler)
+
+    logger.info("Bot starting...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
