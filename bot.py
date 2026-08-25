@@ -14,9 +14,9 @@ from telebot import types
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN=8669573949:AAGLHICtiGrNXJ-4SeRCwZbt3hKGgNcz5kQ", "").strip()
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("متغیر TELEGRAM_TOKEN تنظیم نشده است.")
+    raise RuntimeError("متغیر TELEGRAM_TOKEN=8669573949:AAGLHICtiGrNXJ-4SeRCwZbt3hKGgNcz5kQ تنظیم نشده است.")
 
 DB_PATH = os.getenv("DB_PATH", "ezpanel.sqlite3")
 SUPPORT_URL = os.getenv("SUPPORT_URL", "https://t.me/sup_EzPanelMarker")
